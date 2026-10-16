@@ -8,8 +8,13 @@ const alertSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['overspeed', 'overload', 'route-deviation', 'missed-area', 'delayed-collection', 'vehicle-breakdown', 'fuel-low', 'vehicle-offline', 'overweight', 'zone-boundary-breach', 'maintenance-due', 'fatigue'],
+    enum: ['overspeed', 'overload', 'route-deviation', 'missed-area', 'delayed-collection', 'vehicle-breakdown', 'fuel-low', 'vehicle-offline', 'overweight', 'zone-boundary-breach', 'maintenance-due', 'fatigue', 'prolonged-stop'],
     required: true
+  },
+  stopId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'VehicleStop',
+    default: null
   },
   severity: {
     type: String,

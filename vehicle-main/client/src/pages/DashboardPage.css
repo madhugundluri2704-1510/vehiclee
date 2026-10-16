@@ -8,3 +8,15 @@
 .alerts-card .alerts-list { max-height: 320px; overflow-y: auto; }
 @media (max-width: 1024px) { .dashboard-grid { grid-template-columns: 1fr 1fr; } .dashboard-grid .span-2 { grid-column: span 1; } }
 @media (max-width: 768px) { .dashboard-grid { grid-template-columns: 1fr; } .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+
+.highlight-alert-row {
+  background: rgba(239, 68, 68, 0.08) !important;
+}
+.highlight-alert-row:hover {
+  background: rgba(239, 68, 68, 0.14) !important;
+}
+.active-stops-card {
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  animation: slideUp 0.4s ease;
+}
+

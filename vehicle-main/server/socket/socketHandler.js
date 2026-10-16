@@ -6,14 +6,20 @@ const Attendance = require('../models/Attendance');
 const DriverActivity = require('../models/DriverActivity');
 const Complaint = require('../models/Complaint');
 const { assignNearestVehicle, optimizeReturnRoute, getDistance } = require('../utils/assignmentEngine');
+const { processVehiclePosition, checkDisconnectedVehicles } = require('../utils/stopDetectionEngine');
 
 const cleaningZones = ['Zone 1','Zone 2','Zone 3','Zone 4','Zone 5','Zone 6','Zone 7','Zone 8','Zone 9','Zone 10'];
 let simulationInterval = null;
+let simulationTicks = 0;
 
 const initializeSocket = (io) => {
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
     socket.on('join:dashboard', () => { socket.join('dashboard'); });
+    socket.on('join:driver', (driverId) => {
+      socket.join(`driver:${driverId}`);
+      console.log(`👷 Driver socket joined room: driver:${driverId}`);
+    });
     socket.on('track:vehicle', (vid) => { socket.join(`vehicle:${vid}`); });
     socket.on('untrack:vehicle', (vid) => { socket.leave(`vehicle:${vid}`); });
     socket.on('disconnect', () => { console.log(`❌ Disconnected: ${socket.id}`); });
@@ -25,8 +31,65 @@ const startSimulation = (io) => {
   console.log('🚛 Starting Kurnool cleaning vehicle simulation...');
   simulationInterval = setInterval(async () => {
     try {
-      const vehicles = await Vehicle.find({ status: 'active' });
+      simulationTicks++;
+      if (simulationTicks % 10 === 0) {
+        await checkDisconnectedVehicles(io);
+      }
+
+      const vehicles = await Vehicle.find({
+        $or: [{ status: 'active' }, { 'currentStop.stopId': { $ne: null } }]
+      });
+
       for (const vehicle of vehicles) {
+        // If vehicle has an active stop, keep stationary with realistic GPS jitter
+        if (vehicle.currentStop?.stopId) {
+          const baseLat = vehicle.currentStop.lat || vehicle.currentLocation.lat || 15.8281;
+          const baseLng = vehicle.currentStop.lng || vehicle.currentLocation.lng || 78.0373;
+          const jitterLat = baseLat + (Math.random() - 0.5) * 0.00004;
+          const jitterLng = baseLng + (Math.random() - 0.5) * 0.00004;
+
+          await processVehiclePosition({
+            vehicle,
+            lat: jitterLat,
+            lng: jitterLng,
+            speed: 0,
+            timestamp: new Date(),
+            io
+          });
+
+          await Vehicle.findByIdAndUpdate(vehicle._id, {
+            currentLocation: { lat: jitterLat, lng: jitterLng },
+            speed: 0,
+            status: vehicle.status || 'idle',
+            currentStop: vehicle.currentStop,
+            lastGpsUpdate: new Date()
+          });
+
+          io.to('dashboard').emit('vehicle:update', {
+            _id: vehicle._id,
+            vehicleNumber: vehicle.vehicleNumber,
+            currentLocation: { lat: jitterLat, lng: jitterLng },
+            speed: 0,
+            fuelLevel: vehicle.fuelLevel,
+            heading: vehicle.heading,
+            status: vehicle.status || 'idle',
+            currentLoadWeight: vehicle.currentLoadWeight,
+            cleaningZone: vehicle.cleaningZone,
+            wasteType: vehicle.wasteType,
+            currentStop: vehicle.currentStop
+          });
+
+          io.to(`vehicle:${vehicle._id}`).emit('tracking:live', {
+            latitude: jitterLat,
+            longitude: jitterLng,
+            speed: 0,
+            fuelLevel: vehicle.fuelLevel,
+            wasteWeight: vehicle.currentLoadWeight,
+            timestamp: new Date()
+          });
+          continue;
+        }
+
         const speed = 10 + Math.random() * 25;
         const heading = vehicle.heading + (Math.random() - 0.5) * 30;
         const dist = (speed / 3600) * 3;
@@ -42,13 +105,23 @@ const startSimulation = (io) => {
         await Vehicle.findByIdAndUpdate(vehicle._id, {
           currentLocation: { lat: newLat, lng: newLng }, speed: Math.round(speed),
           fuelLevel: Math.round(newFuel * 10) / 10, heading: heading % 360,
-          mileage: vehicle.mileage + dist, currentLoadWeight: newLoad
+          mileage: vehicle.mileage + dist, currentLoadWeight: newLoad,
+          lastGpsUpdate: new Date()
         });
         await Tracking.create({
           vehicleId: vehicle._id, latitude: newLat, longitude: newLng,
           speed: Math.round(speed), heading: heading % 360, fuelLevel: newFuel,
           wasteWeight: newLoad, cleaningZone: vehicle.cleaningZone,
           eventType: wastePickup > 0 ? 'collection' : 'position'
+        });
+
+        await processVehiclePosition({
+          vehicle,
+          lat: newLat,
+          lng: newLng,
+          speed: Math.round(speed),
+          timestamp: new Date(),
+          io
         });
 
         // Try to optimize return route if returning
@@ -96,7 +169,8 @@ const startSimulation = (io) => {
           currentLocation: { lat: newLat, lng: newLng }, speed: Math.round(speed),
           fuelLevel: Math.round(newFuel * 10) / 10, heading: heading % 360,
           status: vehicle.status, currentLoadWeight: newLoad,
-          cleaningZone: vehicle.cleaningZone, wasteType: vehicle.wasteType
+          cleaningZone: vehicle.cleaningZone, wasteType: vehicle.wasteType,
+          currentStop: vehicle.currentStop
         });
         io.to(`vehicle:${vehicle._id}`).emit('tracking:live', {
           latitude: newLat, longitude: newLng, speed: Math.round(speed),

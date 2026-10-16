@@ -6,6 +6,7 @@ import useAlertStore from '../store/useAlertStore';
 import useSocket from '../hooks/useSocket';
 import api from '../services/api';
 import { formatTimeAgo, getStatusColor, getVehicleIcon, getSeverityIcon, formatWeight, getWasteTypeIcon } from '../utils/formatters';
+import ActiveStopsTable from '../components/stops/ActiveStopsTable';
 import './DashboardPage.css';
 
 const COLORS = ['#059669', '#10b981', '#0d9488', '#0ea5e9', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6'];
@@ -30,6 +31,12 @@ export default function DashboardPage() {
     if (!socket) return;
     socket.on('new_complaint', (complaint) => {
       setRecentComplaints((prev) => [complaint, ...prev].slice(0, 6));
+      setComplaintStats(prev => prev ? {
+        ...prev,
+        totalPending: prev.totalPending + 1,
+        citizenComplaintsToday: complaint.source === 'Citizen' ? prev.citizenComplaintsToday + 1 : prev.citizenComplaintsToday,
+        cctvAlertsToday: complaint.source === 'CCTV' ? prev.cctvAlertsToday + 1 : prev.cctvAlertsToday
+      } : prev);
     });
     return () => {
       socket.off('new_complaint');
@@ -90,6 +97,17 @@ export default function DashboardPage() {
           <div className="stat-icon red">🚨</div>
           <div className="stat-info"><span className="stat-label">Pending Complaints</span><span className="stat-value">{complaintStats?.totalPending || 0}</span><span className="stat-change down">{complaintStats?.cctvAlertsToday || 0} CCTV alerts today</span></div>
         </div>
+        <div className="stat-card" onClick={() => {
+          const el = document.querySelector('.active-stops-card');
+          if (el) el.scrollIntoView({ behavior: 'smooth' });
+        }}>
+          <div className="stat-icon yellow">🛑</div>
+          <div className="stat-info">
+            <span className="stat-label">Stopped Vehicles</span>
+            <span className="stat-value">{vehicles.filter(v => v.status === 'idle' || v.currentStop?.stopId).length}</span>
+            <span className="stat-change down">Idle / Stationary</span>
+          </div>
+        </div>
       </div>
 
       <div className="dashboard-grid">
@@ -147,6 +165,9 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Real-time Vehicle Stop Detection & Explanation Table */}
+      <ActiveStopsTable onSelectStopOnMap={() => navigate('/tracking')} />
 
       <div className="card vehicle-table-card">
         <div className="card-header"><h3 className="card-title">Fleet Overview</h3><button className="btn btn-primary btn-sm" onClick={() => navigate('/tracking')}>View All →</button></div>

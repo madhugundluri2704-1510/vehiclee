@@ -113,6 +113,40 @@ const vehicleSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Complaint',
     default: null
+  },
+  currentStop: {
+    stopId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'VehicleStop',
+      default: null
+    },
+    stoppedAt: {
+      type: Date,
+      default: null
+    },
+    lat: { type: Number, default: null },
+    lng: { type: Number, default: null },
+    durationMinutes: {
+      type: Number,
+      default: 0
+    },
+    alertTriggered: {
+      type: Boolean,
+      default: false
+    },
+    explanationRequired: {
+      type: Boolean,
+      default: false
+    },
+    explanationStatus: {
+      type: String,
+      enum: ['not_required', 'pending_submission', 'submitted', 'approved', 'rejected'],
+      default: 'not_required'
+    }
+  },
+  lastGpsUpdate: {
+    type: Date,
+    default: Date.now
   }
 }, {
   timestamps: true

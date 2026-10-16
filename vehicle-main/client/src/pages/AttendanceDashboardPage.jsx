@@ -29,7 +29,7 @@ export default function AttendanceDashboardPage() {
 
   useEffect(() => {
     fetchTodayAttendance();
-    fetchDrivers({ status: 'active' });
+    fetchDrivers({ limit: 100 });
     fetchVehicles();
   }, []);
 
@@ -106,14 +106,21 @@ export default function AttendanceDashboardPage() {
     }
   };
 
-  // Filter lists
-  const checkedInDriverIds = attendanceLogs.map(log => log.driverId?._id).filter(Boolean);
-  const checkedInVehiclesIds = attendanceLogs.filter(log => !log.checkOut).map(log => log.assignedVehicle?._id).filter(Boolean);
+  // Filter lists - exclude only drivers and vehicles currently on active duty shift
+  const activeDriverIds = attendanceLogs
+    .filter(log => !log.checkOut && log.status !== 'Absent')
+    .map(log => (log.driverId?._id || log.driverId)?.toString())
+    .filter(Boolean);
 
-  const availableDrivers = drivers.filter(d => !checkedInDriverIds.includes(d._id));
-  const availableVehicles = vehicles.filter(v => !checkedInVehiclesIds.includes(v._id) && v.status !== 'maintenance');
+  const activeVehicleIds = attendanceLogs
+    .filter(log => !log.checkOut && log.status !== 'Absent')
+    .map(log => (log.assignedVehicle?._id || log.assignedVehicle)?.toString())
+    .filter(Boolean);
 
-  const currentlyOnShift = attendanceLogs.filter(log => !log.checkOut);
+  const availableDrivers = drivers.filter(d => !activeDriverIds.includes(d._id?.toString()));
+  const availableVehicles = vehicles.filter(v => !activeVehicleIds.includes(v._id?.toString()) && v.status !== 'maintenance');
+
+  const currentlyOnShift = attendanceLogs.filter(log => !log.checkOut && log.status !== 'Absent');
 
   const filteredLogs = attendanceLogs.filter(log => 
     log.driverId?.driverName?.toLowerCase().includes(searchTerm.toLowerCase()) ||

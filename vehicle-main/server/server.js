@@ -21,6 +21,7 @@ const reportRoutes = require('./routes/reportRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
 const driverPerformanceRoutes = require('./routes/driverPerformanceRoutes');
 const complaintRoutes = require('./routes/complaintRoutes');
+const stopRoutes = require('./routes/stopRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -53,8 +54,8 @@ app.set('io', io);
 // Middleware
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors(corsOptions));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -68,6 +69,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/performance', driverPerformanceRoutes);
 app.use('/api/complaints', complaintRoutes);
+app.use('/api/stops', stopRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

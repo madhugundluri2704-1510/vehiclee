@@ -17,10 +17,16 @@ exports.checkIn = async (req, res) => {
     const { driverId, vehicleId, latitude, longitude } = req.body;
     const todayStr = getTodayDateString();
 
-    // Check if driver already checked in today
-    const existingAttendance = await Attendance.findOne({ driverId, date: todayStr });
-    if (existingAttendance) {
-      return res.status(400).json({ message: 'Driver has already checked in for today.' });
+    // Check if driver is currently on an active duty shift (checked in without checkout)
+    const activeAttendance = await Attendance.findOne({
+      driverId,
+      date: todayStr,
+      checkOut: null,
+      status: { $ne: 'Absent' }
+    });
+
+    if (activeAttendance) {
+      return res.status(400).json({ message: 'Driver is currently on active duty shift. Check out first before new check-in.' });
     }
 
     // Get driver details
@@ -50,15 +56,30 @@ exports.checkIn = async (req, res) => {
       status = 'Late';
     }
 
-    // Create attendance record
-    const attendance = await Attendance.create({
-      driverId,
-      date: todayStr,
-      checkIn: checkInTime,
-      checkInLocation: { lat: latitude, lng: longitude },
-      assignedVehicle: vehicleId,
-      status
-    });
+    // Create or update attendance record for today
+    let attendance = await Attendance.findOne({ driverId, date: todayStr });
+    if (attendance) {
+      attendance.checkIn = checkInTime;
+      attendance.checkOut = null;
+      attendance.checkInLocation = { lat: latitude, lng: longitude };
+      attendance.assignedVehicle = vehicleId;
+      attendance.status = status;
+      attendance.totalHours = 0;
+      attendance.overtime = 0;
+      attendance.breakTime = 0;
+      attendance.activeDrivingTime = 0;
+      attendance.idleTime = 0;
+      await attendance.save();
+    } else {
+      attendance = await Attendance.create({
+        driverId,
+        date: todayStr,
+        checkIn: checkInTime,
+        checkInLocation: { lat: latitude, lng: longitude },
+        assignedVehicle: vehicleId,
+        status
+      });
+    }
 
     // Update driver assigned vehicle & temporary status
     driver.assignedVehicle = vehicleId;

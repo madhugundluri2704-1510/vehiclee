@@ -35,4 +35,17 @@ api.interceptors.response.use(
   }
 );
 
+export const stopApi = {
+  getActiveStops: () => api.get('/stops/active'),
+  getStopHistory: (params) => api.get('/stops/history', { params }),
+  getStopById: (id) => api.get(`/stops/${id}`),
+  getVehicleStops: (vehicleId, limit = 30) => api.get(`/stops/vehicle/${vehicleId}?limit=${limit}`),
+  getDriverPendingStops: () => api.get('/stops/driver/pending'),
+  submitExplanation: (id, payload) => api.post(`/stops/${id}/explanation`, payload),
+  reviewExplanation: (id, payload) => api.put(`/stops/${id}/review`, payload),
+  getConfig: () => api.get('/stops/config'),
+  updateConfig: (config) => api.put('/stops/config', config),
+  simulateStop: (payload) => api.post('/stops/simulate', payload)
+};
+
 export default api;

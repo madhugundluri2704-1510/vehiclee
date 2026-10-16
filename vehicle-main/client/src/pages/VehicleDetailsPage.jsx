@@ -14,6 +14,7 @@ export default function VehicleDetailsPage() {
   const [vehicle, setVehicle] = useState(null);
   const [tracking, setTracking] = useState([]);
   const [waste, setWaste] = useState([]);
+  const [stops, setStops] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('overview');
 
@@ -22,11 +23,13 @@ export default function VehicleDetailsPage() {
       api.get(`/vehicles/${id}`),
       api.get(`/tracking/${id}?limit=100`),
       api.get(`/waste?search=`),
-    ]).then(([vRes, tRes, wRes]) => {
+      api.get(`/stops/vehicle/${id}?limit=50`)
+    ]).then(([vRes, tRes, wRes, sRes]) => {
       setVehicle(vRes.data);
       setTracking(tRes.data);
       const vWaste = (wRes.data?.collections || wRes.data || []).filter(c => c.vehicleId?._id === id || c.vehicleId === id);
       setWaste(vWaste);
+      setStops(sRes.data || []);
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [id]);
@@ -65,6 +68,7 @@ export default function VehicleDetailsPage() {
         <button className={`tab ${tab==='overview'?'active':''}`} onClick={()=>setTab('overview')}>Overview</button>
         <button className={`tab ${tab==='tracking'?'active':''}`} onClick={()=>setTab('tracking')}>Tracking</button>
         <button className={`tab ${tab==='waste'?'active':''}`} onClick={()=>setTab('waste')}>Waste Collection</button>
+        <button className={`tab ${tab==='stops'?'active':''}`} onClick={()=>setTab('stops')}>🛑 Stops & Idle History ({stops.length})</button>
       </div>
 
       {tab === 'overview' && (
@@ -115,6 +119,78 @@ export default function VehicleDetailsPage() {
           <div className="data-table-wrapper"><table className="data-table"><thead><tr><th>ID</th><th>Type</th><th>Weight</th><th>Container</th><th>Zone</th><th>Status</th></tr></thead><tbody>
             {waste.map(c=>(<tr key={c._id}><td><strong>{c.collectionId}</strong></td><td>{getWasteTypeIcon(c.wasteType)} {c.wasteType}</td><td>{formatWeight(c.loadWeight)}</td><td>{c.containerType}</td><td>{c.cleaningZone}</td><td><span className={`badge ${getStatusColor(c.collectionStatus)}`}>{c.collectionStatus}</span></td></tr>))}
           </tbody></table></div>)}
+        </div>
+      )}
+
+      {tab === 'stops' && (
+        <div className="card">
+          <h3 className="card-title" style={{marginBottom:'var(--space-md)'}}>Vehicle Stop & Idle Event History</h3>
+          {stops.length === 0 ? (
+            <div className="empty-state">
+              <span className="empty-state-icon">🛑</span>
+              <span className="empty-state-text">No recorded stops for this vehicle</span>
+            </div>
+          ) : (
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Start Time</th>
+                    <th>End Time</th>
+                    <th>Duration</th>
+                    <th>Zone</th>
+                    <th>Reason</th>
+                    <th>Driver's Explanation</th>
+                    <th>Supervisor Review</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stops.map((s) => (
+                    <tr key={s._id}>
+                      <td>{new Date(s.startTime).toLocaleString('en-IN')}</td>
+                      <td>{s.endTime ? new Date(s.endTime).toLocaleTimeString('en-IN') : <span className="badge badge-warning">Currently Stopped</span>}</td>
+                      <td>
+                        <span style={{ fontWeight: 600, color: s.durationMinutes >= 10 ? '#ef4444' : 'inherit' }}>
+                          ⏱️ {s.durationMinutes} mins
+                        </span>
+                      </td>
+                      <td>{s.cleaningZone || 'Zone 1'}</td>
+                      <td>
+                        {s.explanation?.reason ? (
+                          <span className="badge badge-in-progress" style={{ textTransform: 'capitalize' }}>
+                            {s.explanation.reason}
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>None provided</span>
+                        )}
+                      </td>
+                      <td style={{ maxWidth: '200px', fontSize: '0.82rem' }}>
+                        {s.explanation?.details || '—'}
+                      </td>
+                      <td>
+                        {s.review?.status === 'approved' ? (
+                          <span className="badge badge-active">✓ Approved</span>
+                        ) : s.review?.status === 'rejected' ? (
+                          <div>
+                            <span className="badge badge-offline">✕ Rejected</span>
+                            {s.review.remarks && (
+                              <span style={{ display: 'block', fontSize: '0.7rem', color: '#ef4444' }}>
+                                "{s.review.remarks}"
+                              </span>
+                            )}
+                          </div>
+                        ) : s.explanation?.reason ? (
+                          <span className="badge badge-warning">⏳ Pending</span>
+                        ) : (
+                          <span style={{ color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>

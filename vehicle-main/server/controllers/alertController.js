@@ -10,6 +10,10 @@ exports.getAlerts = async (req, res) => {
 
     const alerts = await Alert.find(query)
       .populate('vehicleId', 'vehicleNumber driverName vehicleType')
+      .populate({
+        path: 'stopId',
+        select: 'durationMinutes startTime endTime status explanation review location'
+      })
       .sort({ createdAt: -1 })
       .limit(parseInt(limit));
 

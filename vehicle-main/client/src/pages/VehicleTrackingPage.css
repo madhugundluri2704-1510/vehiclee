@@ -145,6 +145,7 @@
 .vehicle-marker-icon {
   background: transparent !important;
   border: none !important;
+  transition: transform 3s linear;
 }
 
 .vehicle-popup .leaflet-popup-content-wrapper {
