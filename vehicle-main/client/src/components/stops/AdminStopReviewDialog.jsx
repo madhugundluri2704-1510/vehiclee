@@ -56,6 +56,15 @@ export default function AdminStopReviewDialog({ open, onClose, stop, onSuccess }
       <DialogContent dividers>
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
+        {review.status && review.status !== 'pending' && (
+          <Alert
+            severity={review.status === 'approved' ? 'success' : 'error'}
+            sx={{ mb: 2, fontWeight: 600 }}
+          >
+            ⏹️ Stop timer stopped! This incident was <strong>{review.status.toUpperCase()}</strong> by {review.reviewedByName || 'Admin'} on {review.reviewedAt ? new Date(review.reviewedAt).toLocaleString('en-IN') : 'N/A'}. Final recorded duration: <strong>{stop.finalDurationMinutes != null ? stop.finalDurationMinutes : (stop.durationMinutes || 0)} minutes</strong>.
+          </Alert>
+        )}
+
         {/* Vehicle & Stop Summary */}
         <Box sx={{ mb: 2, p: 2, bgcolor: 'background.default', borderRadius: 1.5, border: '1px solid rgba(255,255,255,0.1)' }}>
           <Typography variant="subtitle2" color="text.secondary" gutterBottom>
@@ -69,7 +78,7 @@ export default function AdminStopReviewDialog({ open, onClose, stop, onSuccess }
               <strong>Duration:</strong>{' '}
               <Chip
                 size="small"
-                color={durationMins >= 10 ? 'error' : 'warning'}
+                color={durationMins >= 15 ? 'error' : 'warning'}
                 label={`${durationMins} minutes`}
                 sx={{ fontWeight: 600 }}
               />

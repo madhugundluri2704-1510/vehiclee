@@ -4,10 +4,12 @@ import api, { stopApi } from '../services/api';
 import useAuthStore from '../store/useAuthStore';
 import StopExplanationDialog from '../components/stops/StopExplanationDialog';
 import { Chip, Button, Alert as MuiAlert } from '@mui/material';
+import useSocket from '../hooks/useSocket';
 import './DriverPortalPage.css';
 
 export default function DriverPortalPage() {
   const { user } = useAuthStore();
+  const { socket } = useSocket();
   const [data, setData] = useState(null);
   const [driverStops, setDriverStops] = useState([]);
   const [pendingStops, setPendingStops] = useState([]);
@@ -19,10 +21,16 @@ export default function DriverPortalPage() {
     try {
       const [pendingRes, historyRes] = await Promise.all([
         stopApi.getDriverPendingStops(),
-        assignedVehicleId ? stopApi.getVehicleStops(assignedVehicleId, 10) : Promise.resolve({ data: [] })
+        assignedVehicleId ? stopApi.getVehicleStops(assignedVehicleId, 15) : Promise.resolve({ data: [] })
       ]);
-      setPendingStops(pendingRes.data || []);
+      const pending = pendingRes.data || [];
+      setPendingStops(pending);
       setDriverStops(historyRes.data || []);
+
+      // Mandatory display: automatically pop open modal if there is a pending stop needing explanation
+      if (pending.length > 0 && !selectedStopForExplanation) {
+        setSelectedStopForExplanation(pending[0]);
+      }
     } catch (err) {
       console.error('Error fetching driver stops:', err);
     }
@@ -46,6 +54,28 @@ export default function DriverPortalPage() {
     };
     fetchMyPerformance();
   }, []);
+
+  // Listen to WebSocket events for real-time driver stop alerts and review decisions
+  useEffect(() => {
+    if (!socket) return;
+    const handleDriverUpdate = () => {
+      if (data?.driver?.assignedVehicle?._id) {
+        fetchDriverStops(data.driver.assignedVehicle._id);
+      } else {
+        fetchDriverStops();
+      }
+    };
+
+    socket.on('driver:stop_explanation_required', handleDriverUpdate);
+    socket.on('driver:explanation_reviewed', handleDriverUpdate);
+    socket.on('stop:timer_stopped', handleDriverUpdate);
+
+    return () => {
+      socket.off('driver:stop_explanation_required', handleDriverUpdate);
+      socket.off('driver:explanation_reviewed', handleDriverUpdate);
+      socket.off('stop:timer_stopped', handleDriverUpdate);
+    };
+  }, [socket, data]);
 
   if (loading) return <div className="portal-loading">Loading your dashboard...</div>;
   if (error) return <div className="portal-error">{error}</div>;
@@ -94,7 +124,7 @@ export default function DriverPortalPage() {
                 </Button>
               }
             >
-              <strong>⚠️ Prolonged Stop Action Required:</strong> Vehicle <strong>{pStop.vehicleNumber}</strong> has been stationary for <strong>{pStop.durationMinutes || 10}+ minutes</strong>. Municipal policy requires an explanation for stops over 10 minutes.
+              <strong>⚠️ Prolonged Stop Action Required:</strong> Vehicle <strong>{pStop.vehicleNumber}</strong> has been stationary for <strong>{pStop.durationMinutes || 15}+ minutes</strong>. Municipal policy requires a mandatory explanation for stops over 15 minutes.
             </MuiAlert>
           ))}
         </div>
@@ -241,7 +271,7 @@ export default function DriverPortalPage() {
                   <td>{new Date(st.startTime).toLocaleString('en-IN')}</td>
                   <td><strong>{st.vehicleNumber}</strong></td>
                   <td>
-                    <span style={{ fontWeight: 600, color: st.durationMinutes >= 10 ? '#ef4444' : 'inherit' }}>
+                    <span style={{ fontWeight: 600, color: st.durationMinutes >= 15 ? '#ef4444' : 'inherit' }}>
                       ⏱️ {st.durationMinutes} mins
                     </span>
                   </td>

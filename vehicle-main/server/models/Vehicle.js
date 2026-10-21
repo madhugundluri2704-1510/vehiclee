@@ -142,6 +142,14 @@ const vehicleSchema = new mongoose.Schema({
       type: String,
       enum: ['not_required', 'pending_submission', 'submitted', 'approved', 'rejected'],
       default: 'not_required'
+    },
+    timerStopped: {
+      type: Boolean,
+      default: false
+    },
+    timerStoppedAt: {
+      type: Date,
+      default: null
     }
   },
   lastGpsUpdate: {

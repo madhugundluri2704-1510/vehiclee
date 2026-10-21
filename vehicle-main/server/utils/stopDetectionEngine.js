@@ -6,7 +6,7 @@ const { haversineDistance } = require('./geoUtils');
 
 // Configurable threshold settings (backed by env and runtime state)
 const config = {
-  thresholdMinutes: parseFloat(process.env.STOP_THRESHOLD_MINUTES || '10'),
+  thresholdMinutes: parseFloat(process.env.STOP_THRESHOLD_MINUTES || '15'),
   speedThresholdKmh: parseFloat(process.env.STOP_SPEED_THRESHOLD || '3.0'),
   driftThresholdMeters: parseFloat(process.env.STOP_DRIFT_METERS || '40.0'),
   disconnectTimeoutMinutes: parseFloat(process.env.DISCONNECT_TIMEOUT_MINUTES || '5')
@@ -54,12 +54,25 @@ const processVehiclePosition = async ({ vehicle, lat, lng, speed, timestamp = ne
 
       if (isStillStationary) {
         // Vehicle is still stationary at approximately the same GPS location
+        // Check if the registered stop record has already had its timer stopped (e.g. reviewed by admin)
+        let stopRecord = await VehicleStop.findById(vehicle.currentStop.stopId);
+
+        if (stopRecord && (stopRecord.timerStopped || stopRecord.review?.status === 'approved' || stopRecord.review?.status === 'rejected')) {
+          // Incident timer is already stopped/decided! Do not re-increment or reopen this incident timer.
+          vehicle.currentStop.stopId = null;
+          vehicle.currentStop.durationMinutes = 0;
+          vehicle.currentStop.alertTriggered = false;
+          vehicle.currentStop.explanationRequired = false;
+          vehicle.currentStop.explanationStatus = 'not_required';
+          vehicle.currentStop.stoppedAt = stopRecord.timerStoppedAt || now;
+          await vehicle.save();
+          return { isStopped: true, stop: stopRecord, vehicle };
+        }
+
         const stoppedAt = new Date(vehicle.currentStop.stoppedAt || now);
         const elapsedMinutes = (now.getTime() - stoppedAt.getTime()) / (1000 * 60);
         const roundedDuration = Math.round(elapsedMinutes * 10) / 10;
 
-        // Fetch active stop record
-        let stopRecord = await VehicleStop.findById(vehicle.currentStop.stopId);
         if (!stopRecord) {
           // Re-create if somehow missing
           stopRecord = await VehicleStop.create({
@@ -164,15 +177,19 @@ const processVehiclePosition = async ({ vehicle, lat, lng, speed, timestamp = ne
         // Finalize stop record in MongoDB
         let completedStop = null;
         if (vehicle.currentStop.stopId) {
-          completedStop = await VehicleStop.findByIdAndUpdate(
-            vehicle.currentStop.stopId,
-            {
-              endTime: now,
-              durationMinutes: totalDuration,
-              status: 'completed'
-            },
-            { new: true }
-          );
+          completedStop = await VehicleStop.findById(vehicle.currentStop.stopId);
+          if (completedStop) {
+            completedStop.endTime = now;
+            if (!completedStop.timerStopped) {
+              completedStop.durationMinutes = totalDuration;
+              completedStop.finalDurationMinutes = totalDuration;
+              completedStop.timerStopped = true;
+              completedStop.timerStoppedAt = now;
+            }
+            completedStop.status = 'completed';
+            // CRITICAL: Preserve pending explanation & review status for admin dashboard
+            await completedStop.save();
+          }
         }
 
         // Record stop event in tracking history
@@ -198,20 +215,30 @@ const processVehiclePosition = async ({ vehicle, lat, lng, speed, timestamp = ne
           durationMinutes: 0,
           alertTriggered: false,
           explanationRequired: false,
-          explanationStatus: 'not_required'
+          explanationStatus: 'not_required',
+          timerStopped: false,
+          timerStoppedAt: null
         };
         vehicle.status = 'active';
         vehicle.lastGpsUpdate = now;
 
-        // Real-time notification of stop completion
+        // Real-time notification of stop completion & timer stopped
         if (io) {
           io.to('dashboard').emit('vehicle:stop_ended', {
             vehicleId: vehicle._id,
             vehicleNumber: vehicle.vehicleNumber,
             stopId: prevStopId,
-            durationMinutes: totalDuration,
+            durationMinutes: completedStop?.durationMinutes || totalDuration,
             endTime: now,
             completedStop
+          });
+          io.to('dashboard').emit('stop:timer_stopped', {
+            stopId: prevStopId,
+            vehicleId: vehicle._id,
+            vehicleNumber: vehicle.vehicleNumber,
+            durationMinutes: completedStop?.durationMinutes || totalDuration,
+            timerStoppedAt: now,
+            reason: 'vehicle_resumed_movement'
           });
         }
 
@@ -325,9 +352,9 @@ const checkDisconnectedVehicles = async (io) => {
 
 /**
  * Helper to simulate/test a vehicle stop with custom duration.
- * Allows testing the 10-minute threshold without waiting real-time.
+ * Allows testing the 15-minute threshold without waiting real-time.
  */
-const simulateTestStop = async ({ vehicleId, durationMinutes = 12, io }) => {
+const simulateTestStop = async ({ vehicleId, durationMinutes = 16, io }) => {
   const vehicle = await Vehicle.findById(vehicleId);
   if (!vehicle) throw new Error('Vehicle not found');
 
@@ -348,8 +375,13 @@ const simulateTestStop = async ({ vehicleId, durationMinutes = 12, io }) => {
   if (stop) {
     stop.startTime = simulatedStartTime;
     stop.durationMinutes = dur;
+    stop.finalDurationMinutes = null;
+    stop.timerStopped = false;
+    stop.timerStoppedAt = null;
     stop.alertTriggered = alertTriggered;
     stop.status = 'active';
+    stop.review = { status: 'pending', reviewedBy: null, reviewedByName: '', reviewedAt: null, remarks: '' };
+    stop.explanation = { reason: null, details: '', submittedAt: null, submittedBy: null, driverName: '' };
     await stop.save();
   } else {
     stop = await VehicleStop.create({
@@ -363,8 +395,12 @@ const simulateTestStop = async ({ vehicleId, durationMinutes = 12, io }) => {
       wardNumber: vehicle.wardNumber,
       startTime: simulatedStartTime,
       durationMinutes: dur,
+      finalDurationMinutes: null,
+      timerStopped: false,
+      timerStoppedAt: null,
       status: 'active',
-      alertTriggered
+      alertTriggered,
+      review: { status: 'pending' }
     });
   }
 

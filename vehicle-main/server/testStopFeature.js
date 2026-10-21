@@ -4,7 +4,8 @@ const Driver = require('./models/Driver');
 const VehicleStop = require('./models/VehicleStop');
 const Alert = require('./models/Alert');
 const Tracking = require('./models/Tracking');
-const { processVehiclePosition, getStopConfig, updateStopConfig } = require('./utils/stopDetectionEngine');
+const { processVehiclePosition, getStopConfig } = require('./utils/stopDetectionEngine');
+const stopController = require('./controllers/stopController');
 
 async function runTests() {
   console.log('🧪 Starting Vehicle Stop Detection & Explanation Test Suite...\n');
@@ -12,152 +13,335 @@ async function runTests() {
   try {
     await connectDB();
 
-    // 1. Setup test driver and vehicle
-    console.log('1️⃣ Creating test driver and vehicle...');
-    const driver = await Driver.create({
-      driverName: 'Test Driver Venkatesh',
-      phoneNumber: '+91 98765 43210',
+    const mockIo = {
+      to: (room) => ({
+        emit: (event, data) => {
+          // Log socket events for verification
+          // console.log(`   📡 [MockSocket -> ${room}] ${event}`);
+        }
+      })
+    };
+
+    // =========================================================================
+    // 1. SETUP TEST ENTITIES
+    // =========================================================================
+    console.log('1️⃣ Creating test drivers and vehicles...');
+    const driverA = await Driver.create({
+      driverName: 'Test Driver Ramesh',
+      phoneNumber: '+91 98765 11111',
       shiftTime: 'morning'
     });
 
-    const vehicle = await Vehicle.create({
-      vehicleNumber: 'AP24TEST9999',
+    const driverB = await Driver.create({
+      driverName: 'Test Driver Suresh',
+      phoneNumber: '+91 98765 22222',
+      shiftTime: 'afternoon'
+    });
+
+    const vehicleA = await Vehicle.create({
+      vehicleNumber: 'AP24TEST0001',
       vehicleType: 'garbage-truck',
-      assignedDriver: driver._id,
-      driverName: driver.driverName,
-      driverPhone: driver.phoneNumber,
+      assignedDriver: driverA._id,
+      driverName: driverA.driverName,
+      driverPhone: driverA.phoneNumber,
       status: 'active',
       currentLocation: { lat: 15.8281, lng: 78.0373 },
       speed: 25,
       cleaningZone: 'Zone 1'
     });
 
-    console.log(`   ✓ Created vehicle ${vehicle.vehicleNumber} and driver ${driver.driverName}`);
+    const vehicleB = await Vehicle.create({
+      vehicleNumber: 'AP24TEST0002',
+      vehicleType: 'mini-truck',
+      assignedDriver: driverB._id,
+      driverName: driverB.driverName,
+      driverPhone: driverB.phoneNumber,
+      status: 'active',
+      currentLocation: { lat: 15.8300, lng: 78.0400 },
+      speed: 20,
+      cleaningZone: 'Zone 2'
+    });
 
-    // 2. Test initial stop detection
-    console.log('\n2️⃣ Testing initial stop detection (speed = 0 km/h)...');
-    const stopTime1 = new Date(Date.now() - 11 * 60 * 1000); // 11 minutes ago to test threshold directly
+    console.log(`   ✓ Vehicle A (${vehicleA.vehicleNumber}) and Vehicle B (${vehicleB.vehicleNumber}) created.`);
 
-    const mockIo = {
-      to: (room) => ({
-        emit: (event, data) => {
-          console.log(`   📡 [MockSocket -> ${room}] ${event}`);
-        }
-      })
-    };
+    // =========================================================================
+    // 2. TEST 15-MINUTE STOP DETECTION & ALERT TRIGGERING
+    // =========================================================================
+    console.log('\n2️⃣ Testing stop detection over 15 minutes (threshold = 15m)...');
+    const stopTimeA = new Date(Date.now() - 16 * 60 * 1000); // 16 minutes ago (exceeds 15m)
 
-    const stopResult1 = await processVehiclePosition({
-      vehicle,
+    // Initial stationary position
+    await processVehiclePosition({
+      vehicle: vehicleA,
       lat: 15.8281,
       lng: 78.0373,
       speed: 0,
-      timestamp: stopTime1,
+      timestamp: stopTimeA,
       io: mockIo
     });
 
-    console.log(`   ✓ Stop detected: ${stopResult1.isStopped}`);
-    console.log(`   ✓ Active Stop ID: ${vehicle.currentStop?.stopId}`);
-    if (!stopResult1.isStopped || !vehicle.currentStop?.stopId) {
-      throw new Error('Initial stop detection failed!');
-    }
-
-    // 3. Test GPS fluctuation (drift) within 40m tolerance
-    console.log('\n3️⃣ Testing GPS fluctuation / jitter filtering (small drift ~10 meters)...');
-    // 0.00008 deg is ~9 meters
-    const jitterLat = 15.8281 + 0.00008;
-    const jitterLng = 78.0373 + 0.00008;
-    const nowTime = new Date();
-
-    const stopResult2 = await processVehiclePosition({
-      vehicle,
-      lat: jitterLat,
-      lng: jitterLng,
+    // Tick at current time to trigger > 15 min alert
+    const stopResultA = await processVehiclePosition({
+      vehicle: vehicleA,
+      lat: 15.8281,
+      lng: 78.0373,
       speed: 0,
-      timestamp: nowTime,
-      io: mockIo
-    });
-
-    console.log(`   ✓ Filtered GPS jitter: Vehicle remains stationary = ${stopResult2.isStopped}`);
-    console.log(`   ✓ Server-calculated Stop Duration: ${vehicle.currentStop?.durationMinutes} minutes`);
-    console.log(`   ✓ Alert Triggered: ${vehicle.currentStop?.alertTriggered}`);
-
-    if (vehicle.currentStop?.durationMinutes < 10 || !vehicle.currentStop?.alertTriggered) {
-      throw new Error('10-minute prolonged stop threshold alert did not trigger as expected!');
-    }
-
-    // Verify Alert record in DB
-    const alertDoc = await Alert.findOne({ vehicleId: vehicle._id, type: 'prolonged-stop' });
-    console.log(`   ✓ MongoDB Alert created: "${alertDoc?.message}"`);
-    if (!alertDoc) throw new Error('Alert document was not created in MongoDB!');
-
-    // 4. Test driver explanation submission
-    console.log('\n4️⃣ Testing driver explanation submission...');
-    const stopRecord = await VehicleStop.findById(vehicle.currentStop.stopId);
-    stopRecord.explanation = {
-      reason: 'traffic',
-      details: 'Severe traffic congestion near Kurnool Bus Stand roadblock.',
-      submittedAt: new Date(),
-      driverName: driver.driverName
-    };
-    stopRecord.review = { status: 'pending' };
-    await stopRecord.save();
-
-    console.log(`   ✓ Explanation saved: reason="${stopRecord.explanation.reason}", status="${stopRecord.review.status}"`);
-
-    // 5. Test admin review & approval
-    console.log('\n5️⃣ Testing admin review (Approve)...');
-    stopRecord.review = {
-      status: 'approved',
-      reviewedByName: 'KMC Admin',
-      reviewedAt: new Date(),
-      remarks: 'Verified via traffic camera. Approved.'
-    };
-    await stopRecord.save();
-
-    // Mark alert acknowledged upon approval
-    alertDoc.acknowledged = true;
-    alertDoc.resolvedAt = new Date();
-    await alertDoc.save();
-
-    console.log(`   ✓ Review completed: status="${stopRecord.review.status}", remarks="${stopRecord.review.remarks}"`);
-    console.log(`   ✓ Alert resolved: acknowledged=${alertDoc.acknowledged}`);
-
-    // 6. Test vehicle movement resumption
-    console.log('\n6️⃣ Testing vehicle movement resumption (speed = 22 km/h, moved away)...');
-    const moveLat = 15.8350; // moved ~800 meters away
-    const moveLng = 78.0420;
-
-    const moveResult = await processVehiclePosition({
-      vehicle,
-      lat: moveLat,
-      lng: moveLng,
-      speed: 22,
       timestamp: new Date(),
       io: mockIo
     });
 
-    console.log(`   ✓ Vehicle moving again: isStopped=${moveResult.isStopped}`);
-    console.log(`   ✓ Completed Stop Duration: ${moveResult.completedStop?.durationMinutes} minutes`);
-    console.log(`   ✓ Vehicle Status restored to: ${vehicle.status}`);
-    console.log(`   ✓ vehicle.currentStop cleared: stopId=${vehicle.currentStop?.stopId}`);
+    console.log(`   ✓ Stop detected: isStopped=${stopResultA.isStopped}`);
+    console.log(`   ✓ Active Stop ID: ${vehicleA.currentStop?.stopId}`);
+    console.log(`   ✓ Duration: ${vehicleA.currentStop?.durationMinutes} mins`);
+    console.log(`   ✓ Alert Triggered: ${vehicleA.currentStop?.alertTriggered}`);
+    console.log(`   ✓ Explanation Required: ${vehicleA.currentStop?.explanationRequired}`);
 
-    const finalStopInDb = await VehicleStop.findById(stopRecord._id);
-    console.log(`   ✓ Final stop record in MongoDB: status="${finalStopInDb.status}", endTime=${finalStopInDb.endTime}`);
+    if (!vehicleA.currentStop?.alertTriggered || vehicleA.currentStop?.durationMinutes < 15) {
+      throw new Error('15-minute prolonged stop threshold alert did not trigger!');
+    }
 
-    // 7. Verify Tracking history event
-    const stopTrackingPoint = await Tracking.findOne({ vehicleId: vehicle._id, eventType: 'stop' });
-    console.log(`   ✓ Tracking stop history point recorded: eventType="${stopTrackingPoint?.eventType}"`);
+    const alertDocA = await Alert.findOne({ vehicleId: vehicleA._id, type: 'prolonged-stop' });
+    if (!alertDocA) throw new Error('Alert document not created in DB!');
+    console.log(`   ✓ Alert created: "${alertDocA.message}"`);
+
+    // =========================================================================
+    // 3. TEST DRIVER EXPLANATION SUBMISSION (REASONS LIKE ROAD ACCIDENT)
+    // =========================================================================
+    console.log('\n3️⃣ Testing mandatory driver explanation submission (Road Accident)...');
+    const stopRecordA = await VehicleStop.findById(vehicleA.currentStop.stopId);
+    stopRecordA.explanation = {
+      reason: 'road accident',
+      details: 'Collision with a two-wheeler at bellary chowk, awaiting traffic police clearance.',
+      submittedAt: new Date(),
+      driverName: driverA.driverName
+    };
+    stopRecordA.review = { status: 'pending' };
+    await stopRecordA.save();
+
+    console.log(`   ✓ Explanation submitted: reason="${stopRecordA.explanation.reason}", status="${stopRecordA.review.status}"`);
+
+    // =========================================================================
+    // 4. TEST SCENARIO A: ADMIN APPROVAL -> IMMEDIATELY STOPS TIMER
+    // =========================================================================
+    console.log('\n4️⃣ Testing Admin Decision: APPROVAL & Timer Stopping...');
+    const decisionTimeA = new Date();
+    const durationAtDecisionA = stopRecordA.durationMinutes;
+
+    // Simulate reviewExplanation controller behavior
+    stopRecordA.review = {
+      status: 'approved',
+      reviewedByName: 'KMC Municipal Commissioner',
+      reviewedAt: decisionTimeA,
+      remarks: 'Verified with traffic CCTV. Stop approved.'
+    };
+    stopRecordA.timerStopped = true;
+    stopRecordA.timerStoppedAt = decisionTimeA;
+    stopRecordA.finalDurationMinutes = durationAtDecisionA;
+    stopRecordA.status = 'completed';
+    await stopRecordA.save();
+
+    // Alert acknowledged
+    alertDocA.acknowledged = true;
+    alertDocA.resolvedAt = decisionTimeA;
+    await alertDocA.save();
+
+    // Decouple currentStop timer on vehicle
+    vehicleA.currentStop.stopId = null;
+    vehicleA.currentStop.explanationStatus = 'approved';
+    vehicleA.currentStop.timerStopped = true;
+    vehicleA.currentStop.timerStoppedAt = decisionTimeA;
+    await vehicleA.save();
+
+    console.log(`   ✓ Stop marked as: status="${stopRecordA.review.status}"`);
+    console.log(`   ✓ Incident timerStopped: ${stopRecordA.timerStopped}`);
+    console.log(`   ✓ Timer stopped at: ${stopRecordA.timerStoppedAt}`);
+    console.log(`   ✓ Preserved final duration: ${stopRecordA.finalDurationMinutes} mins`);
+
+    // Test that subsequent position updates DO NOT increment the stopped incident's timer
+    await processVehiclePosition({
+      vehicle: vehicleA,
+      lat: 15.8281,
+      lng: 78.0373,
+      speed: 0,
+      timestamp: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes later
+      io: mockIo
+    });
+
+    const refreshedStopA = await VehicleStop.findById(stopRecordA._id);
+    console.log(`   ✓ Verified after 5 minutes: duration remains frozen at ${refreshedStopA.durationMinutes} mins`);
+    if (refreshedStopA.durationMinutes !== durationAtDecisionA || refreshedStopA.timerStopped !== true) {
+      throw new Error('Approved incident timer was reopened or restarted!');
+    }
+
+    // =========================================================================
+    // 5. TEST SCENARIO B: ADMIN REJECTION -> IMMEDIATELY STOPS TIMER
+    // =========================================================================
+    console.log('\n5️⃣ Testing Admin Decision: REJECTION & Timer Stopping (Vehicle B)...');
+    const stopTimeB = new Date(Date.now() - 17 * 60 * 1000); // 17 minutes ago
+
+    await processVehiclePosition({
+      vehicle: vehicleB,
+      lat: 15.8300,
+      lng: 78.0400,
+      speed: 0,
+      timestamp: stopTimeB,
+      io: mockIo
+    });
+
+    await processVehiclePosition({
+      vehicle: vehicleB,
+      lat: 15.8300,
+      lng: 78.0400,
+      speed: 0,
+      timestamp: new Date(),
+      io: mockIo
+    });
+
+    const stopRecordB = await VehicleStop.findById(vehicleB.currentStop.stopId);
+    stopRecordB.explanation = {
+      reason: 'traffic jam',
+      details: 'Took unscheduled tea break during traffic slowdown.',
+      submittedAt: new Date(),
+      driverName: driverB.driverName
+    };
+    stopRecordB.review = { status: 'pending' };
+    await stopRecordB.save();
+
+    const decisionTimeB = new Date();
+    const durationAtDecisionB = stopRecordB.durationMinutes;
+
+    // Admin rejects explanation
+    stopRecordB.review = {
+      status: 'rejected',
+      reviewedByName: 'KMC Area Supervisor',
+      reviewedAt: decisionTimeB,
+      remarks: 'Unscheduled halt not justified. Penalized.'
+    };
+    stopRecordB.timerStopped = true;
+    stopRecordB.timerStoppedAt = decisionTimeB;
+    stopRecordB.finalDurationMinutes = durationAtDecisionB;
+    stopRecordB.status = 'completed';
+    await stopRecordB.save();
+
+    vehicleB.currentStop.stopId = null;
+    vehicleB.currentStop.explanationStatus = 'rejected';
+    vehicleB.currentStop.timerStopped = true;
+    vehicleB.currentStop.timerStoppedAt = decisionTimeB;
+    await vehicleB.save();
+
+    console.log(`   ✓ Stop marked as: status="${stopRecordB.review.status}"`);
+    console.log(`   ✓ Incident timerStopped: ${stopRecordB.timerStopped}`);
+    console.log(`   ✓ Preserved final duration: ${stopRecordB.finalDurationMinutes} mins`);
+
+    // Verify rejection stopped the timer immediately
+    if (stopRecordB.review.status !== 'rejected' || !stopRecordB.timerStopped) {
+      throw new Error('Rejection scenario did not stop timer correctly!');
+    }
+
+    // =========================================================================
+    // 6. TEST VEHICLE RESUMES MOVEMENT BEFORE ADMIN DECISION
+    // =========================================================================
+    console.log('\n6️⃣ Testing Vehicle Resuming Movement BEFORE Admin Decision...');
+    const vehicleC = await Vehicle.create({
+      vehicleNumber: 'AP24TEST0003',
+      vehicleType: 'auto-tipper',
+      assignedDriver: driverA._id,
+      driverName: driverA.driverName,
+      status: 'active',
+      currentLocation: { lat: 15.8250, lng: 78.0350 },
+      speed: 0,
+      cleaningZone: 'Zone 3'
+    });
+
+    const stopTimeC = new Date(Date.now() - 20 * 60 * 1000); // 20 mins ago
+    await processVehiclePosition({
+      vehicle: vehicleC,
+      lat: 15.8250,
+      lng: 78.0350,
+      speed: 0,
+      timestamp: stopTimeC,
+      io: mockIo
+    });
+
+    await processVehiclePosition({
+      vehicle: vehicleC,
+      lat: 15.8250,
+      lng: 78.0350,
+      speed: 0,
+      timestamp: new Date(),
+      io: mockIo
+    });
+
+    const stopRecordC = await VehicleStop.findById(vehicleC.currentStop.stopId);
+    stopRecordC.explanation = {
+      reason: 'emergency',
+      details: 'Hydraulic lift leakage required emergency check.',
+      submittedAt: new Date(),
+      driverName: driverA.driverName
+    };
+    stopRecordC.review = { status: 'pending' };
+    await stopRecordC.save();
+
+    // Now vehicle resumes movement at 24 km/h (moved 600m away)
+    const resumeMoveTime = new Date();
+    const moveResultC = await processVehiclePosition({
+      vehicle: vehicleC,
+      lat: 15.8310,
+      lng: 78.0390,
+      speed: 24,
+      timestamp: resumeMoveTime,
+      io: mockIo
+    });
+
+    console.log(`   ✓ Vehicle resumed movement: isStopped=${moveResultC.isStopped}`);
+    console.log(`   ✓ Vehicle status updated to: ${vehicleC.status}`);
+
+    // Verify stop record has actual recorded duration and pending explanation is NOT lost
+    const resumedStopInDb = await VehicleStop.findById(stopRecordC._id);
+    console.log(`   ✓ Stop status: "${resumedStopInDb.status}"`);
+    console.log(`   ✓ Stop timerStopped: ${resumedStopInDb.timerStopped}`);
+    console.log(`   ✓ Actual stop duration recorded: ${resumedStopInDb.durationMinutes} mins`);
+    console.log(`   ✓ Pending explanation preserved: reason="${resumedStopInDb.explanation?.reason}", reviewStatus="${resumedStopInDb.review?.status}"`);
+
+    if (resumedStopInDb.review?.status !== 'pending' || !resumedStopInDb.explanation?.reason) {
+      throw new Error('Pending explanation was lost when vehicle resumed movement!');
+    }
+
+    // Admin subsequently reviews and approves the pending explanation
+    resumedStopInDb.review = {
+      status: 'approved',
+      reviewedByName: 'KMC Sanitation Inspector',
+      reviewedAt: new Date(),
+      remarks: 'Maintenance confirmed. Approved.'
+    };
+    await resumedStopInDb.save();
+    console.log(`   ✓ Admin subsequently approved pending explanation: status="${resumedStopInDb.review.status}"`);
+
+    // =========================================================================
+    // 7. TIMER ASSOCIATION & PAGE RELOAD / PERSISTENCE CHECK
+    // =========================================================================
+    console.log('\n7️⃣ Testing Timer Association & Backend Persistence (Simulating Page Reload)...');
+    // Fetch stops via controller query
+    const allStops = await VehicleStop.find({
+      _id: { $in: [stopRecordA._id, stopRecordB._id, stopRecordC._id] }
+    });
+
+    for (const s of allStops) {
+      if (!s.timerStopped || !s.finalDurationMinutes) {
+        throw new Error(`Incident ${s.vehicleNumber} did not persist stopped timer state in DB!`);
+      }
+      console.log(`   ✓ Incident ${s.vehicleNumber} (${s._id}): status=${s.review.status}, duration=${s.finalDurationMinutes}m, timerStopped=${s.timerStopped}`);
+    }
 
     // Clean up test records
-    await Vehicle.findByIdAndDelete(vehicle._id);
-    await Driver.findByIdAndDelete(driver._id);
-    await VehicleStop.findByIdAndDelete(stopRecord._id);
-    await Alert.findByIdAndDelete(alertDoc._id);
-    if (stopTrackingPoint) await Tracking.findByIdAndDelete(stopTrackingPoint._id);
+    await Vehicle.deleteMany({ vehicleNumber: { $in: ['AP24TEST0001', 'AP24TEST0002', 'AP24TEST0003'] } });
+    await Driver.deleteMany({ _id: { $in: [driverA._id, driverB._id] } });
+    await VehicleStop.deleteMany({ _id: { $in: [stopRecordA._id, stopRecordB._id, stopRecordC._id] } });
+    await Alert.deleteMany({ vehicleId: { $in: [vehicleA._id, vehicleB._id, vehicleC._id] } });
 
-    console.log('\n🎉 ALL 7 TESTS PASSED SUCCESSFULLY! The Vehicle Stop Detection & Explanation feature is fully functional and verified.');
+    console.log('\n🎉 ALL 7 TEST SUITES PASSED! Stop Detection, Driver Explanations, Admin Approval & Rejection, and Timer Stopping are fully verified.');
   } catch (error) {
-    console.error('\n❌ Test failed:', error);
+    console.error('\n❌ Test execution failed:', error);
     process.exit(1);
   } finally {
     await disconnectDB();

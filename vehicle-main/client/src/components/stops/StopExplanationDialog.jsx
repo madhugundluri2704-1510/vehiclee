@@ -18,11 +18,13 @@ import {
 import { stopApi } from '../../services/api';
 
 const PREDEFINED_REASONS = [
-  { value: 'garbage collection', label: '♻️ Garbage Collection / Bin Emptying' },
-  { value: 'traffic', label: '🚦 Traffic Congestion / Roadblock' },
+  { value: 'road accident', label: '💥 Road Accident' },
+  { value: 'traffic jam', label: '🚦 Traffic Jam / Congestion' },
   { value: 'vehicle breakdown', label: '⚠️ Vehicle Breakdown / Mechanical Issue' },
-  { value: 'fuel refill', label: '⛽ Fuel Refill / Gas Station' },
-  { value: 'maintenance', label: '🔧 Scheduled / Emergency Maintenance' },
+  { value: 'emergency', label: '🚨 Emergency Situation' },
+  { value: 'garbage collection', label: '♻️ Garbage Collection / Bin Emptying' },
+  { value: 'fuel refill', label: '⛽ Fuel Refill' },
+  { value: 'maintenance', label: '🔧 Vehicle Maintenance' },
   { value: 'other', label: '📋 Other Reason' }
 ];
 
@@ -75,7 +77,7 @@ export default function StopExplanationDialog({ open, onClose, stop, onSuccess }
                 <strong>Stop Duration:</strong>{' '}
                 <Chip
                   size="small"
-                  color={durationMins >= 10 ? 'error' : 'warning'}
+                  color={durationMins >= 15 ? 'error' : 'warning'}
                   label={`${durationMins} minutes`}
                   sx={{ fontWeight: 600 }}
                 />

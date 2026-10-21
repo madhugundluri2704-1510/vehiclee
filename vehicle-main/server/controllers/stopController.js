@@ -3,10 +3,16 @@ const Vehicle = require('../models/Vehicle');
 const Alert = require('../models/Alert');
 const { getStopConfig, updateStopConfig, simulateTestStop } = require('../utils/stopDetectionEngine');
 
-// 1. Get all active stops
+// 1. Get all active & pending stops (plus recently reviewed stops for visible audit)
 exports.getActiveStops = async (req, res) => {
   try {
-    const stops = await VehicleStop.find({ status: 'active' })
+    const stops = await VehicleStop.find({
+      $or: [
+        { status: 'active' },
+        { alertTriggered: true, 'review.status': 'pending' },
+        { 'review.status': { $in: ['approved', 'rejected'] }, updatedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
+      ]
+    })
       .populate('vehicleId', 'vehicleNumber vehicleType driverName status currentLocation cleaningZone')
       .populate('driverId', 'driverName phoneNumber shiftTime')
       .sort({ startTime: -1 });
@@ -14,13 +20,24 @@ exports.getActiveStops = async (req, res) => {
     const now = Date.now();
     const config = getStopConfig();
 
-    // Recalculate up-to-date elapsed durations dynamically
+    // Recalculate up-to-date elapsed durations dynamically or preserve frozen duration if timer stopped
     const enrichedStops = stops.map(stop => {
-      const elapsedMinutes = (now - new Date(stop.startTime).getTime()) / (1000 * 60);
       const doc = stop.toObject();
-      doc.durationMinutes = Math.round(elapsedMinutes * 10) / 10;
+      const isTimerStopped = Boolean(doc.timerStopped || doc.review?.status === 'approved' || doc.review?.status === 'rejected' || doc.endTime);
+
+      if (isTimerStopped) {
+        // Incident timer has stopped - preserve recorded duration exactly!
+        doc.isTimerRunning = false;
+        doc.durationMinutes = doc.finalDurationMinutes != null ? doc.finalDurationMinutes : (doc.durationMinutes || 0);
+      } else {
+        // Incident timer is actively running - compute from startTime
+        const elapsedMinutes = (now - new Date(stop.startTime).getTime()) / (1000 * 60);
+        doc.isTimerRunning = true;
+        doc.durationMinutes = Math.round(elapsedMinutes * 10) / 10;
+      }
+
       doc.thresholdMinutes = config.thresholdMinutes;
-      doc.isOverThreshold = elapsedMinutes >= config.thresholdMinutes;
+      doc.isOverThreshold = doc.durationMinutes >= config.thresholdMinutes || doc.alertTriggered;
       return doc;
     });
 
@@ -147,9 +164,12 @@ exports.submitExplanation = async (req, res) => {
     const { reason, details } = req.body;
 
     const validReasons = [
+      'road accident',
+      'traffic jam',
+      'vehicle breakdown',
+      'emergency',
       'garbage collection',
       'traffic',
-      'vehicle breakdown',
       'fuel refill',
       'maintenance',
       'other'
@@ -201,7 +221,8 @@ exports.submitExplanation = async (req, res) => {
         explanation: stop.explanation,
         location: stop.location,
         durationMinutes: stop.durationMinutes,
-        timestamp: new Date()
+        timestamp: new Date(),
+        stop
       });
     }
 
@@ -214,7 +235,7 @@ exports.submitExplanation = async (req, res) => {
   }
 };
 
-// 7. Admin reviews explanation (Approve or Reject)
+// 7. Admin reviews explanation (Approve or Reject) - Immediately stops the incident timer
 exports.reviewExplanation = async (req, res) => {
   try {
     const { id } = req.params;
@@ -233,41 +254,83 @@ exports.reviewExplanation = async (req, res) => {
       return res.status(400).json({ message: 'No explanation has been submitted for this stop yet' });
     }
 
+    const decisionTime = new Date();
+
+    // Calculate final duration:
+    // If vehicle had already resumed movement, stop.endTime was when it moved.
+    // Otherwise, the stop incident timer stops right now at decisionTime.
+    const effectiveEndTime = stop.endTime || decisionTime;
+    const totalDuration = Math.max(0, Math.round(((effectiveEndTime.getTime() - new Date(stop.startTime).getTime()) / (1000 * 60)) * 10) / 10);
+
+    // Stop timer immediately and persist review decision
     stop.review = {
-      status,
+      status, // 'approved' or 'rejected'
       reviewedBy: req.user._id,
       reviewedByName: req.user.username || 'Admin',
-      reviewedAt: new Date(),
+      reviewedAt: decisionTime,
       remarks: remarks.trim()
     };
+    stop.timerStopped = true;
+    stop.timerStoppedAt = decisionTime;
+    stop.durationMinutes = totalDuration;
+    stop.finalDurationMinutes = totalDuration;
+    stop.status = 'completed'; // Incident is now closed/completed
+    if (!stop.endTime) {
+      stop.endTime = decisionTime;
+    }
     await stop.save();
 
-    // If approved and has alert, acknowledge the alert
-    if (status === 'approved' && stop.alertId) {
+    // If has alert, acknowledge/resolve it
+    if (stop.alertId) {
       await Alert.findByIdAndUpdate(stop.alertId, {
         acknowledged: true,
         acknowledgedBy: req.user._id,
-        resolvedAt: new Date()
+        resolvedAt: decisionTime
       });
     }
 
-    // If vehicle currently has this stop active, update status
+    // Update vehicle: stop the incident timer on the vehicle and decouple the stopId
     const vehicle = await Vehicle.findById(stop.vehicleId);
-    if (vehicle && vehicle.currentStop?.stopId?.toString() === stop._id.toString()) {
-      vehicle.currentStop.explanationStatus = status;
+    if (vehicle) {
+      if (vehicle.currentStop?.stopId?.toString() === stop._id.toString()) {
+        vehicle.currentStop.explanationStatus = status;
+        vehicle.currentStop.durationMinutes = totalDuration;
+        vehicle.currentStop.timerStopped = true;
+        vehicle.currentStop.timerStoppedAt = decisionTime;
+        // Decouple incident stopId from vehicle.currentStop so subsequent ticks do not increment this incident's timer
+        vehicle.currentStop.stopId = null;
+        vehicle.currentStop.alertTriggered = false;
+        vehicle.currentStop.explanationRequired = false;
+        // Reset stoppedAt so if the vehicle stays stationary, a brand-new 15-minute timer starts from now
+        vehicle.currentStop.stoppedAt = decisionTime;
+      }
       await vehicle.save();
     }
 
     const io = req.app.get('io');
     if (io) {
+      io.to('dashboard').emit('stop:timer_stopped', {
+        stopId: stop._id,
+        vehicleId: stop.vehicleId,
+        vehicleNumber: stop.vehicleNumber,
+        status,
+        durationMinutes: totalDuration,
+        timerStoppedAt: decisionTime,
+        review: stop.review,
+        explanation: stop.explanation
+      });
+
       io.to('dashboard').emit('stop:explanation_reviewed', {
         stopId: stop._id,
         vehicleId: stop.vehicleId,
         vehicleNumber: stop.vehicleNumber,
         status,
         remarks,
+        durationMinutes: totalDuration,
+        timerStoppedAt: decisionTime,
         reviewedBy: req.user.username || 'Admin',
-        timestamp: new Date()
+        timestamp: decisionTime,
+        stop
       });
 
       if (stop.driverId) {
@@ -275,13 +338,15 @@ exports.reviewExplanation = async (req, res) => {
           stopId: stop._id,
           vehicleNumber: stop.vehicleNumber,
           status,
-          remarks
+          remarks,
+          durationMinutes: totalDuration,
+          decisionTime
         });
       }
     }
 
     res.json({
-      message: `Stop explanation ${status} successfully`,
+      message: `Stop explanation ${status} successfully and timer stopped`,
       stop
     });
   } catch (error) {
@@ -315,7 +380,7 @@ exports.updateConfig = async (req, res) => {
 // 10. Simulate test stop (Admin / testing endpoint)
 exports.simulateStop = async (req, res) => {
   try {
-    const { vehicleId, durationMinutes = 12 } = req.body;
+    const { vehicleId, durationMinutes = 16 } = req.body;
     let targetVehicleId = vehicleId;
 
     if (!targetVehicleId) {

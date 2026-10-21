@@ -61,6 +61,19 @@ const vehicleStopSchema = new mongoose.Schema({
     default: 'active',
     index: true
   },
+  timerStopped: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  timerStoppedAt: {
+    type: Date,
+    default: null
+  },
+  finalDurationMinutes: {
+    type: Number,
+    default: null
+  },
   alertTriggered: {
     type: Boolean,
     default: false,
@@ -74,7 +87,18 @@ const vehicleStopSchema = new mongoose.Schema({
   explanation: {
     reason: {
       type: String,
-      enum: ['garbage collection', 'traffic', 'vehicle breakdown', 'fuel refill', 'maintenance', 'other', null],
+      enum: [
+        'road accident',
+        'traffic jam',
+        'vehicle breakdown',
+        'emergency',
+        'garbage collection',
+        'traffic',
+        'fuel refill',
+        'maintenance',
+        'other',
+        null
+      ],
       default: null
     },
     details: {
