@@ -150,18 +150,75 @@ const startSimulation = (io) => {
           }
         }
 
-        // Alerts
+        // Alerts: capture current valid GPS coordinates and location address
         if (speed > 35) {
           const ex = await Alert.findOne({ vehicleId: vehicle._id, type: 'overspeed', acknowledged: false, createdAt: { $gte: new Date(Date.now() - 60000) } });
-          if (!ex) { const a = await Alert.create({ vehicleId: vehicle._id, type: 'overspeed', severity: speed > 45 ? 'critical' : 'high', message: `${vehicle.vehicleNumber} speeding at ${Math.round(speed)} km/h in ${vehicle.cleaningZone}`, location: { lat: newLat, lng: newLng }, cleaningZone: vehicle.cleaningZone }); io.to('dashboard').emit('alert:new', a); }
+          if (!ex) {
+            const a = await Alert.create({
+              vehicleId: vehicle._id,
+              vehicleNumber: vehicle.vehicleNumber,
+              driverName: vehicle.driverName,
+              type: 'overspeed',
+              severity: speed > 45 ? 'critical' : 'high',
+              message: `${vehicle.vehicleNumber} speeding at ${Math.round(speed)} km/h in ${vehicle.cleaningZone}`,
+              location: { lat: newLat, lng: newLng, address: vehicle.cleaningZone || 'Kurnool Municipal Area' },
+              address: vehicle.cleaningZone || 'Kurnool Municipal Area',
+              cleaningZone: vehicle.cleaningZone
+            });
+            io.to('dashboard').emit('alert:new', a);
+          }
         }
         if (newFuel < 15) {
           const ex = await Alert.findOne({ vehicleId: vehicle._id, type: 'fuel-low', acknowledged: false, createdAt: { $gte: new Date(Date.now() - 300000) } });
-          if (!ex) { const a = await Alert.create({ vehicleId: vehicle._id, type: 'fuel-low', severity: newFuel < 5 ? 'critical' : 'medium', message: `${vehicle.vehicleNumber} fuel low at ${Math.round(newFuel)}%`, location: { lat: newLat, lng: newLng }, cleaningZone: vehicle.cleaningZone }); io.to('dashboard').emit('alert:new', a); }
+          if (!ex) {
+            const a = await Alert.create({
+              vehicleId: vehicle._id,
+              vehicleNumber: vehicle.vehicleNumber,
+              driverName: vehicle.driverName,
+              type: 'fuel-low',
+              severity: newFuel < 5 ? 'critical' : 'medium',
+              message: `${vehicle.vehicleNumber} fuel low at ${Math.round(newFuel)}%`,
+              location: { lat: newLat, lng: newLng, address: vehicle.cleaningZone || 'Kurnool Municipal Area' },
+              address: vehicle.cleaningZone || 'Kurnool Municipal Area',
+              cleaningZone: vehicle.cleaningZone
+            });
+            io.to('dashboard').emit('alert:new', a);
+          }
         }
         if (newLoad > vehicle.loadCapacity * 0.9) {
           const ex = await Alert.findOne({ vehicleId: vehicle._id, type: 'overload', acknowledged: false, createdAt: { $gte: new Date(Date.now() - 300000) } });
-          if (!ex) { const a = await Alert.create({ vehicleId: vehicle._id, type: 'overload', severity: newLoad >= vehicle.loadCapacity ? 'critical' : 'high', message: `${vehicle.vehicleNumber} load ${newLoad}kg / ${vehicle.loadCapacity}kg`, location: { lat: newLat, lng: newLng }, cleaningZone: vehicle.cleaningZone }); io.to('dashboard').emit('alert:new', a); }
+          if (!ex) {
+            const a = await Alert.create({
+              vehicleId: vehicle._id,
+              vehicleNumber: vehicle.vehicleNumber,
+              driverName: vehicle.driverName,
+              type: 'overload',
+              severity: newLoad >= vehicle.loadCapacity ? 'critical' : 'high',
+              message: `${vehicle.vehicleNumber} load ${newLoad}kg / ${vehicle.loadCapacity}kg`,
+              location: { lat: newLat, lng: newLng, address: vehicle.cleaningZone || 'Kurnool Municipal Area' },
+              address: vehicle.cleaningZone || 'Kurnool Municipal Area',
+              cleaningZone: vehicle.cleaningZone
+            });
+            io.to('dashboard').emit('alert:new', a);
+          }
+        }
+        // Simulated Route Deviation alert with location
+        if (vehicle.status === 'active' && Math.random() < 0.02) {
+          const ex = await Alert.findOne({ vehicleId: vehicle._id, type: 'route-deviation', acknowledged: false, createdAt: { $gte: new Date(Date.now() - 300000) } });
+          if (!ex) {
+            const a = await Alert.create({
+              vehicleId: vehicle._id,
+              vehicleNumber: vehicle.vehicleNumber,
+              driverName: vehicle.driverName,
+              type: 'route-deviation',
+              severity: 'high',
+              message: `${vehicle.vehicleNumber} deviated from assigned cleaning route in ${vehicle.cleaningZone}`,
+              location: { lat: newLat, lng: newLng, address: `${vehicle.cleaningZone}, Kurnool` },
+              address: `${vehicle.cleaningZone}, Kurnool`,
+              cleaningZone: vehicle.cleaningZone
+            });
+            io.to('dashboard').emit('alert:new', a);
+          }
         }
 
         io.to('dashboard').emit('vehicle:update', {
@@ -213,13 +270,19 @@ const startSimulation = (io) => {
             });
             if (!exFatigue && log.assignedVehicle) {
               const driverObj = await Driver.findById(log.driverId);
+              const assignedVeh = await Vehicle.findById(log.assignedVehicle);
+              const vLat = assignedVeh?.currentLocation?.lat;
+              const vLng = assignedVeh?.currentLocation?.lng;
               const alt = await Alert.create({
                 vehicleId: log.assignedVehicle,
+                vehicleNumber: assignedVeh?.vehicleNumber || 'Unknown Vehicle',
+                driverName: driverObj?.driverName || assignedVeh?.driverName || 'Operator',
                 type: 'fatigue',
                 severity: 'critical',
                 message: `Fatigue Warning: Driver ${driverObj?.driverName || 'Operator'} is working overtime (${Math.round(elapsed)} hrs) without check-out.`,
-                location: { lat: 15.8281, lng: 78.0373 },
-                cleaningZone: driverObj?.address?.split(',')[0] || 'Zone 1'
+                location: (vLat != null && vLng != null) ? { lat: vLat, lng: vLng, address: assignedVeh?.cleaningZone || driverObj?.address || 'Kurnool Municipal Area' } : { lat: null, lng: null, address: assignedVeh?.cleaningZone || 'Kurnool Area' },
+                address: assignedVeh?.cleaningZone || driverObj?.address || 'Zone 1',
+                cleaningZone: assignedVeh?.cleaningZone || driverObj?.address?.split(',')[0] || 'Zone 1'
               });
               io.to('dashboard').emit('alert:new', alt);
             }

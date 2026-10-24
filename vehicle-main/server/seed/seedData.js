@@ -10,6 +10,7 @@ const Attendance = require('../models/Attendance');
 const DriverActivity = require('../models/DriverActivity');
 const DriverPerformance = require('../models/DriverPerformance');
 const WorkforceAnalytics = require('../models/WorkforceAnalytics');
+const VehicleStop = require('../models/VehicleStop');
 
 // Kurnool localities with coordinates
 const kurnoolLocalities = [
@@ -101,6 +102,7 @@ const seedDatabase = async () => {
       DriverActivity.deleteMany({}),
       DriverPerformance.deleteMany({}),
       WorkforceAnalytics.deleteMany({}),
+      VehicleStop.deleteMany({}),
     ]);
 
     // Create admin user
@@ -289,18 +291,118 @@ const seedDatabase = async () => {
         'maintenance-due': `${vehicle.vehicleNumber} maintenance overdue by ${randomBetween(5, 20)} days`,
       };
 
+      // Requirement 8 test case: deliberate missing GPS location for couple alerts
+      const hasGps = (i !== 3 && i !== 8);
+      const loc = (hasGps && vehicle.currentLocation?.lat != null) ? {
+        lat: vehicle.currentLocation.lat,
+        lng: vehicle.currentLocation.lng,
+        address: `${vehicle.cleaningZone}, Kurnool`
+      } : {
+        lat: null,
+        lng: null,
+        address: ''
+      };
+
       await Alert.create({
         vehicleId: vehicle._id,
+        vehicleNumber: vehicle.vehicleNumber,
+        driverName: vehicle.driverName,
         type,
         severity: randomItem(severities),
         message: messages[type],
-        location: vehicle.currentLocation,
+        location: loc,
+        address: hasGps ? `${vehicle.cleaningZone}, Kurnool` : '',
         cleaningZone: vehicle.cleaningZone,
         acknowledged: Math.random() > 0.6,
         createdAt: new Date(Date.now() - randomBetween(0, 72) * 3600000)
       });
     }
     console.log('🚨 25 alerts created');
+
+    // Create 2 realistic stop records and prolonged stop alerts
+    const stop1Start = new Date(Date.now() - 25 * 60 * 1000);
+    const stop1Loc = { lat: 15.8281, lng: 78.0373, address: 'Near Market Area, Zone 1' };
+    const stop1Alert = await Alert.create({
+      vehicleId: vehicles[0]._id,
+      vehicleNumber: vehicles[0].vehicleNumber,
+      driverName: vehicles[0].driverName,
+      stopDuration: 25,
+      stopStartTime: stop1Start,
+      address: stop1Loc.address,
+      type: 'prolonged-stop',
+      severity: 'high',
+      message: `Vehicle ${vehicles[0].vehicleNumber} (Driver: ${vehicles[0].driverName}) stationary at Zone 1 for 25 minutes. Explanation required from driver.`,
+      location: { lat: stop1Loc.lat, lng: stop1Loc.lng },
+      cleaningZone: 'Zone 1',
+      acknowledged: false,
+      createdAt: new Date(Date.now() - 15 * 60 * 1000)
+    });
+
+    const stop1 = await VehicleStop.create({
+      vehicleId: vehicles[0]._id,
+      vehicleNumber: vehicles[0].vehicleNumber,
+      driverId: vehicles[0].assignedDriver,
+      driverName: vehicles[0].driverName,
+      driverPhone: vehicles[0].driverPhone,
+      location: stop1Loc,
+      cleaningZone: 'Zone 1',
+      wardNumber: 1,
+      startTime: stop1Start,
+      durationMinutes: 25,
+      status: 'active',
+      timerStopped: false,
+      alertTriggered: true,
+      alertId: stop1Alert._id
+    });
+    await Alert.findByIdAndUpdate(stop1Alert._id, { stopId: stop1._id });
+
+    // Vehicle 1 has moved since alert (Requirement 5 test case!)
+    const stop2Start = new Date(Date.now() - 35 * 60 * 1000);
+    const stop2Loc = { lat: 15.8350, lng: 78.0300, address: 'Gandhi Nagar Main Junction' };
+    const stop2Alert = await Alert.create({
+      vehicleId: vehicles[1]._id,
+      vehicleNumber: vehicles[1].vehicleNumber,
+      driverName: vehicles[1].driverName,
+      stopDuration: 22,
+      stopStartTime: stop2Start,
+      address: stop2Loc.address,
+      type: 'prolonged-stop',
+      severity: 'high',
+      message: `Vehicle ${vehicles[1].vehicleNumber} (Driver: ${vehicles[1].driverName}) stopped for 22 mins near Gandhi Nagar. Explanation submitted.`,
+      location: { lat: stop2Loc.lat, lng: stop2Loc.lng },
+      cleaningZone: 'Zone 2',
+      acknowledged: false,
+      createdAt: new Date(Date.now() - 20 * 60 * 1000)
+    });
+
+    const stop2 = await VehicleStop.create({
+      vehicleId: vehicles[1]._id,
+      vehicleNumber: vehicles[1].vehicleNumber,
+      driverId: vehicles[1].assignedDriver,
+      driverName: vehicles[1].driverName,
+      driverPhone: vehicles[1].driverPhone,
+      location: stop2Loc,
+      cleaningZone: 'Zone 2',
+      wardNumber: 2,
+      startTime: stop2Start,
+      endTime: new Date(Date.now() - 13 * 60 * 1000),
+      durationMinutes: 22,
+      finalDurationMinutes: 22,
+      status: 'completed',
+      timerStopped: true,
+      alertTriggered: true,
+      alertId: stop2Alert._id,
+      explanation: {
+        reason: 'traffic jam',
+        details: 'Heavy vehicle blockage and road construction near Kurnool Bus Stand.',
+        submittedAt: new Date(Date.now() - 18 * 60 * 1000),
+        driverName: vehicles[1].driverName
+      },
+      review: {
+        status: 'pending'
+      }
+    });
+    await Alert.findByIdAndUpdate(stop2Alert._id, { stopId: stop2._id });
 
     // Create 30 days of simulated attendance, performance, and timeline activity logs
     console.log('⏰ Seeding attendance, activities, and performance logs...');
@@ -494,7 +596,6 @@ const seedDatabase = async () => {
       });
     }
     console.log('⏰ Attendance, activities, and performance logs successfully seeded!');
-    console.log('🚨 25 alerts created');
 
     console.log('\n✅ Kurnool Municipal Corporation database seeded successfully!');
     console.log('🏛️  Admin login: admin@kmc.gov.in / admin123');

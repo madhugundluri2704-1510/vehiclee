@@ -23,6 +23,7 @@ import AttendanceReportsPage from './pages/AttendanceReportsPage';
 import CitizenPortal from './pages/CitizenPortal';
 import ComplaintManagementPage from './pages/ComplaintManagementPage';
 import DriverPortalPage from './pages/DriverPortalPage';
+import RealtimeAlertToast from './components/alerts/RealtimeAlertToast';
 import './App.css';
 
 const pageTitles = {
@@ -55,6 +56,7 @@ function ProtectedLayout() {
       <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
       <div className="app-main">
         <Header title={title} onMobileMenuToggle={() => setMobileOpen(!mobileOpen)} />
+        <RealtimeAlertToast />
         <main className="app-content"><Outlet /></main>
       </div>
     </div>

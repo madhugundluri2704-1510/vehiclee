@@ -6,7 +6,7 @@ const { haversineDistance } = require('./geoUtils');
 
 // Configurable threshold settings (backed by env and runtime state)
 const config = {
-  thresholdMinutes: parseFloat(process.env.STOP_THRESHOLD_MINUTES || '15'),
+  thresholdMinutes: parseFloat(process.env.STOP_THRESHOLD_MINUTES || '10'),
   speedThresholdKmh: parseFloat(process.env.STOP_SPEED_THRESHOLD || '3.0'),
   driftThresholdMeters: parseFloat(process.env.STOP_DRIFT_METERS || '40.0'),
   disconnectTimeoutMinutes: parseFloat(process.env.DISCONNECT_TIMEOUT_MINUTES || '5')
@@ -81,7 +81,11 @@ const processVehiclePosition = async ({ vehicle, lat, lng, speed, timestamp = ne
             driverId: vehicle.assignedDriver,
             driverName: vehicle.driverName,
             driverPhone: vehicle.driverPhone,
-            location: { lat: stopOriginLat, lng: stopOriginLng },
+            location: {
+              lat: stopOriginLat,
+              lng: stopOriginLng,
+              address: stopRecord.location?.address || vehicle.cleaningZone || 'Kurnool Municipal Area'
+            },
             cleaningZone: vehicle.cleaningZone,
             wardNumber: vehicle.wardNumber,
             startTime: stoppedAt,
@@ -104,11 +108,20 @@ const processVehiclePosition = async ({ vehicle, lat, lng, speed, timestamp = ne
           // Create Alert document
           const alert = await Alert.create({
             vehicleId: vehicle._id,
+            vehicleNumber: vehicle.vehicleNumber,
+            driverName: vehicle.driverName,
+            stopDuration: roundedDuration,
+            stopStartTime: stoppedAt,
+            address: stopRecord.location?.address || vehicle.cleaningZone || 'Kurnool Municipal Area',
             stopId: stopRecord._id,
             type: 'prolonged-stop',
             severity: 'high',
             message: `Vehicle ${vehicle.vehicleNumber} (Driver: ${vehicle.driverName}) has been stopped at ${vehicle.cleaningZone} for ${Math.round(elapsedMinutes)} minutes. Explanation required from driver.`,
-            location: { lat: stopOriginLat, lng: stopOriginLng },
+            location: {
+              lat: stopOriginLat,
+              lng: stopOriginLng,
+              address: stopRecord.location?.address || vehicle.cleaningZone || 'Kurnool Municipal Area'
+            },
             cleaningZone: vehicle.cleaningZone,
             acknowledged: false
           });
@@ -128,14 +141,23 @@ const processVehiclePosition = async ({ vehicle, lat, lng, speed, timestamp = ne
           if (io) {
             io.to('dashboard').emit('alert:new', alert);
             io.to('dashboard').emit('vehicle:stop_alert', {
-              stopId: stopRecord._id,
+              vehicleNumber: vehicle.vehicleNumber,
+            driverName: vehicle.driverName,
+            stopDuration: roundedDuration,
+            stopStartTime: stoppedAt,
+            address: stopRecord.location?.address || vehicle.cleaningZone || 'Kurnool Municipal Area',
+            stopId: stopRecord._id,
               alertId: alert._id,
               vehicleId: vehicle._id,
               vehicleNumber: vehicle.vehicleNumber,
               driverName: vehicle.driverName,
               driverPhone: vehicle.driverPhone,
               stopDuration: roundedDuration,
-              location: { lat: stopOriginLat, lng: stopOriginLng },
+              location: {
+              lat: stopOriginLat,
+              lng: stopOriginLng,
+              address: stopRecord.location?.address || vehicle.cleaningZone || 'Kurnool Municipal Area'
+            },
               cleaningZone: vehicle.cleaningZone,
               thresholdMinutes: config.thresholdMinutes,
               stoppedAt
@@ -144,10 +166,19 @@ const processVehiclePosition = async ({ vehicle, lat, lng, speed, timestamp = ne
             // Target assigned driver's socket room
             if (vehicle.assignedDriver) {
               io.to(`driver:${vehicle.assignedDriver}`).emit('driver:stop_explanation_required', {
-                stopId: stopRecord._id,
+                vehicleNumber: vehicle.vehicleNumber,
+            driverName: vehicle.driverName,
+            stopDuration: roundedDuration,
+            stopStartTime: stoppedAt,
+            address: stopRecord.location?.address || vehicle.cleaningZone || 'Kurnool Municipal Area',
+            stopId: stopRecord._id,
                 vehicleNumber: vehicle.vehicleNumber,
                 stopDuration: roundedDuration,
-                location: { lat: stopOriginLat, lng: stopOriginLng },
+                location: {
+              lat: stopOriginLat,
+              lng: stopOriginLng,
+              address: stopRecord.location?.address || vehicle.cleaningZone || 'Kurnool Municipal Area'
+            },
                 cleaningZone: vehicle.cleaningZone,
                 stoppedAt
               });
@@ -159,6 +190,11 @@ const processVehiclePosition = async ({ vehicle, lat, lng, speed, timestamp = ne
         if (io) {
           io.to('dashboard').emit('vehicle:stop_update', {
             vehicleId: vehicle._id,
+            vehicleNumber: vehicle.vehicleNumber,
+            driverName: vehicle.driverName,
+            stopDuration: roundedDuration,
+            stopStartTime: stoppedAt,
+            address: stopRecord.location?.address || vehicle.cleaningZone || 'Kurnool Municipal Area',
             stopId: stopRecord._id,
             durationMinutes: roundedDuration,
             alertTriggered: vehicle.currentStop.alertTriggered,
@@ -344,6 +380,39 @@ const checkDisconnectedVehicles = async (io) => {
           currentLocation: vehicle.currentLocation
         });
       }
+
+      // Capture vehicle location and generate vehicle-offline alert
+      try {
+        const exAlert = await Alert.findOne({
+          vehicleId: vehicle._id,
+          type: 'vehicle-offline',
+          acknowledged: false,
+          createdAt: { $gte: new Date(Date.now() - 300000) }
+        });
+        if (!exAlert) {
+          const vLat = vehicle.currentLocation?.lat;
+          const vLng = vehicle.currentLocation?.lng;
+          const offlineAlert = await Alert.create({
+            vehicleId: vehicle._id,
+            vehicleNumber: vehicle.vehicleNumber,
+            driverName: vehicle.driverName,
+            type: 'vehicle-offline',
+            severity: 'high',
+            message: `Vehicle ${vehicle.vehicleNumber} (${vehicle.driverName}) went offline - no GPS signal received for > ${config.disconnectTimeoutMinutes} minutes.`,
+            location: (vLat != null && vLng != null && !isNaN(vLat) && !isNaN(vLng))
+              ? { lat: vLat, lng: vLng, address: vehicle.cleaningZone || 'Kurnool Municipal Area' }
+              : { lat: null, lng: null, address: vehicle.cleaningZone || 'Kurnool Municipal Area' },
+            address: vehicle.cleaningZone || 'Kurnool Municipal Area',
+            cleaningZone: vehicle.cleaningZone,
+            acknowledged: false
+          });
+          if (io) {
+            io.to('dashboard').emit('alert:new', offlineAlert);
+          }
+        }
+      } catch (alertErr) {
+        console.error('Error generating offline alert:', alertErr.message);
+      }
     }
   } catch (err) {
     console.error('Error in checkDisconnectedVehicles:', err.message);
@@ -408,11 +477,16 @@ const simulateTestStop = async ({ vehicleId, durationMinutes = 16, io }) => {
   if (alertTriggered) {
     alertDoc = await Alert.create({
       vehicleId: vehicle._id,
+      vehicleNumber: vehicle.vehicleNumber,
+      driverName: vehicle.driverName,
+      stopDuration: dur,
+      stopStartTime: simulatedStartTime,
+      address: stop.location?.address || vehicle.cleaningZone || 'Kurnool Municipal Area',
       stopId: stop._id,
       type: 'prolonged-stop',
       severity: 'high',
       message: `Vehicle ${vehicle.vehicleNumber} (Driver: ${vehicle.driverName}) has been stopped at ${vehicle.cleaningZone} for ${Math.round(dur)} minutes. Explanation required from driver.`,
-      location: { lat, lng },
+      location: { lat, lng, address: stop.location?.address || vehicle.cleaningZone || 'Kurnool Municipal Area' },
       cleaningZone: vehicle.cleaningZone,
       acknowledged: false
     });

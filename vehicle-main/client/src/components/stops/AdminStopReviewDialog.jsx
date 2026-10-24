@@ -74,7 +74,7 @@ export default function AdminStopReviewDialog({ open, onClose, stop, onSuccess }
             <Typography variant="body2"><strong>Vehicle:</strong> {stop.vehicleNumber}</Typography>
             <Typography variant="body2"><strong>Driver:</strong> {stop.driverName} {stop.driverPhone ? `(${stop.driverPhone})` : ''}</Typography>
             <Typography variant="body2"><strong>Zone:</strong> {stop.cleaningZone || 'Zone 1'}</Typography>
-            <Typography variant="body2">
+            <Typography variant="body2" component="div">
               <strong>Duration:</strong>{' '}
               <Chip
                 size="small"

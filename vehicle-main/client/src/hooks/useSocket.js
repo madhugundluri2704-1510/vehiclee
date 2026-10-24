@@ -34,12 +34,23 @@ export const useSocket = () => {
         Notification.requestPermission();
       }
     });
+
     socket.on('vehicle:update', (data) => { updateVehiclePosition(data); });
+
+    // Real-time alert notifications (Requirement 4)
     socket.on('alert:new', (alert) => { 
       addAlert(alert); 
       if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification(`🚨 ${alert.severity?.toUpperCase() || 'HIGH'} Alert`, {
-          body: alert.message,
+        const lat = alert.location?.lat;
+        const lng = alert.location?.lng;
+        const hasLoc = lat != null && lng != null && !isNaN(lat) && !isNaN(lng);
+        const locText = hasLoc 
+          ? `📍 GPS: ${Number(lat).toFixed(4)}, ${Number(lng).toFixed(4)}${alert.address ? ' (' + alert.address + ')' : ''}`
+          : '📍 Location: Location unavailable';
+        const vNum = alert.vehicleNumber || alert.vehicleId?.vehicleNumber || 'Vehicle';
+
+        new Notification(`🚨 ${alert.severity?.toUpperCase() || 'HIGH'} Alert: ${vNum}`, {
+          body: `${alert.message}\n${locText}`,
           icon: '/vite.svg'
         });
       }
@@ -67,8 +78,11 @@ export const useSocket = () => {
         startTime: data.stoppedAt
       });
       if ('Notification' in window && Notification.permission === 'granted') {
+        const lat = data.location?.lat;
+        const lng = data.location?.lng;
+        const locStr = (lat != null && lng != null) ? `📍 GPS: ${Number(lat).toFixed(4)}, ${Number(lng).toFixed(4)}` : '';
         new Notification(`🛑 Prolonged Vehicle Stop (${data.stopDuration} mins)`, {
-          body: `${data.vehicleNumber} (${data.driverName}) stopped at ${data.cleaningZone}. Driver explanation required.`,
+          body: `${data.vehicleNumber} (${data.driverName}) stopped at ${data.cleaningZone}.\n${locStr}\nDriver explanation required.`,
           icon: '/vite.svg'
         });
       }

@@ -17,10 +17,18 @@ const useAlertStore = create((set) => ({
     }
   },
 
-  addAlert: (alert) => set((state) => ({
-    alerts: [alert, ...state.alerts].slice(0, 100),
-    unacknowledgedCount: state.unacknowledgedCount + 1
-  })),
+  addAlert: (alert) => set((state) => {
+    const exists = state.alerts.some(a => a._id === alert._id);
+    if (exists) {
+      return {
+        alerts: state.alerts.map(a => a._id === alert._id ? alert : a)
+      };
+    }
+    return {
+      alerts: [alert, ...state.alerts].slice(0, 100),
+      unacknowledgedCount: state.unacknowledgedCount + 1
+    };
+  }),
 
   acknowledgeAlert: async (id) => {
     try {
